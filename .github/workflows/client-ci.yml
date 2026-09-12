@@ -1,0 +1,185 @@
+name: Client CI
+
+on:
+  push:
+    branches: [ master ]
+    # This repo also holds server/, which changes far more often than the
+    # client and needs no macOS runner at all — without this filter, every
+    # server-only push would burn a ~50-minute macOS job for nothing.
+    paths: ['client/**', '.github/workflows/client-ci.yml']
+
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Mirrors weholy/netegram's own workflow — this client/ tree is copied
+    # from there unchanged, so the same toolchain applies. versions.json
+    # (inside client/) requires macOS 26 / Xcode 26.2.
+    runs-on: macos-26
+
+    # Publishing the IPA as a release asset has to create tags and releases.
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          fetch-depth: '0'
+
+      - name: Set active Xcode path
+        working-directory: client
+        run: |
+          XCODE_VERSION=$(cat versions.json | python3 -c 'import json,sys;obj=json.load(sys.stdin);print(obj["xcode"]);')
+          echo "Requested Xcode $XCODE_VERSION; available:"
+          ls /Applications | grep -i '^Xcode' || true
+          sudo xcode-select -s /Applications/Xcode_$XCODE_VERSION.app/Contents/Developer
+          xcodebuild -version
+
+      # The real configuration carries api_id/api_hash and is deliberately not in the
+      # repository. Recreate it here from repository secrets — set your own with:
+      #   gh secret set API_ID -R weholy/wisp
+      #   gh secret set API_HASH -R weholy/wisp
+      #
+      # bundle_id/team_id are identical to weholy/netegram's on purpose: the bundled
+      # fake-codesigning profiles under client/build-system/fake-codesigning were issued
+      # for that exact pair, and BuildConfiguration.py matches a profile by
+      # `profile_name.startswith(team_id + '.' + bundle_id)` — a different bundle id here
+      # would find no matching profile and fail codesigning. The tradeoff: an IPA built
+      # from this workflow has the same bundle id as Netegram's, so the two cannot be
+      # installed side by side on one device yet. Giving WispGram its own identity needs
+      # its own fake-codesigning profiles generated for a new bundle id first — a
+      # follow-up, not part of standing this pipeline up.
+      - name: Create build configuration
+        working-directory: client
+        env:
+          API_ID: ${{ secrets.API_ID }}
+          API_HASH: ${{ secrets.API_HASH }}
+        run: |
+          if [ -z "$API_ID" ] || [ -z "$API_HASH" ]; then
+            echo "::error::Set the API_ID and API_HASH repository secrets (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+          # Secrets pasted through the web UI often carry a trailing newline, which lands
+          # inside the JSON string and makes the parser fail with "Invalid control
+          # character". Strip every whitespace character before interpolating.
+          API_ID_CLEAN=$(printf '%s' "$API_ID" | tr -d '[:space:]')
+          API_HASH_CLEAN=$(printf '%s' "$API_HASH" | tr -d '[:space:]')
+          cat > build-system/ci-configuration.json <<EOF
+          {
+            "bundle_id": "ph.telegra.Telegraph",
+            "api_id": "$API_ID_CLEAN",
+            "api_hash": "$API_HASH_CLEAN",
+            "team_id": "C67CF9S4VU",
+            "app_center_id": "0",
+            "is_internal_build": "true",
+            "is_appstore_build": "false",
+            "appstore_id": "0",
+            "app_specific_url_scheme": "tg",
+            "premium_iap_product_id": "",
+            "enable_siri": false,
+            "enable_icloud": false
+          }
+          EOF
+
+      # Matches --disk_cache in .bazelrc, so a build that dies partway resumes from here
+      # on the next run instead of recompiling everything. Own cache namespace — GitHub
+      # scopes Actions caches per-repository regardless of key name, but a name of its
+      # own keeps this legible if that ever needs debugging.
+      - name: Restore Bazel disk cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/wispgram-bazel
+          key: wispgram-bazel-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            wispgram-bazel-${{ runner.os }}-
+
+      - name: Create canonical source directory
+        run: |
+          set -x
+          # Only client/ — server/ is not part of the iOS build and copying it
+          # along would just waste time. Source code paths are included in the
+          # final binary, so this has to be a fixed path stable across builds,
+          # same reasoning as weholy/netegram's own workflow.
+          sudo mkdir -p /Users/Shared
+          sudo rm -rf /Users/Shared/wispgram
+          cp -R "$GITHUB_WORKSPACE/client" /Users/Shared/wispgram
+
+      - name: Build the App
+        run: |
+          set -x
+
+          SOURCE_DIR=/Users/Shared/wispgram
+          BAZEL_USER_ROOT="/private/var/tmp/_bazel_containerhost"
+
+          cd $SOURCE_DIR
+
+          BUILD_NUMBER_OFFSET="$(cat build_number_offset)"
+
+          export APP_VERSION=$(cat versions.json | python3 -c 'import json,sys;obj=json.load(sys.stdin);print(obj["app"]);')
+          export COMMIT_COUNT=$(git rev-list --count HEAD)
+          export COMMIT_COUNT="$(($COMMIT_COUNT+$BUILD_NUMBER_OFFSET))"
+          export BUILD_NUMBER="$COMMIT_COUNT"
+          echo "BUILD_NUMBER=$(echo $BUILD_NUMBER)" >> $GITHUB_ENV
+          echo "APP_VERSION=$(echo $APP_VERSION)" >> $GITHUB_ENV
+
+          # The version file is still named netegram_version — internal to the
+          # copied client/ tree, unrelated to anything Bazel-visible, so it was
+          # left as-is rather than renamed for its own sake. Only what this
+          # workflow calls it (WISP_RELEASE) and what the output file/release
+          # are named actually needed to change.
+          WISP_RELEASE="$(tr -d '[:space:]' < netegram_version)"
+          export WISP_RELEASE_FILE="$(echo "$WISP_RELEASE" | tr '.' '_')"
+          echo "WISP_RELEASE=$WISP_RELEASE" >> $GITHUB_ENV
+          echo "WISP_RELEASE_FILE=$WISP_RELEASE_FILE" >> $GITHUB_ENV
+
+          # Simulator-signing build, same as weholy/netegram: no code signing beyond the
+          # bundled stub certs, which is enough to compile and package every line of
+          # Swift. A device install needs your own provisioning; see Sideloadly/AltStore.
+          python3 build-system/Make/ImportCertificates.py --path build-system/fake-codesigning/certs
+          python3 -u build-system/Make/Make.py \
+            --bazelUserRoot="$BAZEL_USER_ROOT" \
+            --cacheDir="$HOME/.cache/wispgram-bazel" \
+            build \
+            --configurationPath="build-system/ci-configuration.json" \
+            --codesigningInformationPath=build-system/fake-codesigning \
+            --configuration=release_arm64 \
+            --buildNumber="$BUILD_NUMBER"
+
+          OUTPUT_PATH="build/artifacts"
+          rm -rf "$OUTPUT_PATH"
+          mkdir -p "$OUTPUT_PATH"
+          IPA_PATH=$(find -L bazel-out -maxdepth 6 -name '*.ipa' -type f 2>/dev/null | head -n 1)
+          echo "Found ipa: ${IPA_PATH:-<none>}"
+          if [ -n "$IPA_PATH" ]; then
+            cp "$IPA_PATH" "$OUTPUT_PATH/WispGram_${WISP_RELEASE_FILE}.ipa"
+          else
+            echo "::warning::No .ipa produced. Tree under bazel-out/*/bin/Telegram:"
+            find -L bazel-out -maxdepth 6 -name '*.app' -o -maxdepth 6 -name '*.ipa' 2>/dev/null | head -n 20
+          fi
+
+      # Release asset, not an Actions artifact — no storage quota to hit (2 GiB per
+      # file, no account-wide total). One release per build number; a rerun of the
+      # same commit reuses the number, so the release is created only if missing.
+      #
+      # Signed with the repository's stub certificates, so iOS will refuse to install it
+      # as-is. Re-sign with your own Apple ID (Sideloadly, AltStore) to sideload it.
+      - name: Publish IPA
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          IPA="/Users/Shared/wispgram/build/artifacts/WispGram_${WISP_RELEASE_FILE}.ipa"
+          if [ ! -f "$IPA" ]; then
+            echo "::error::No IPA at $IPA - the build step produced nothing to publish."
+            exit 1
+          fi
+          TAG="wispgram-${WISP_RELEASE}-${BUILD_NUMBER}"
+          if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "WispGram ${WISP_RELEASE} (${BUILD_NUMBER})" \
+              --notes "Commit ${GITHUB_SHA}"
+          fi
+          gh release upload "$TAG" "$IPA" -R "$GITHUB_REPOSITORY" --clobber
+          echo "::notice::IPA: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
