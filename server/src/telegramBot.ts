@@ -140,7 +140,7 @@ function trySetWispNumber(chatId: number, wispNumber: string): boolean {
         db.prepare(
             `INSERT INTO users (wisp_number, telegram_chat_id, display_name, created_at)
              VALUES (?, ?, ?, ?)
-             ON CONFLICT(telegram_chat_id) DO UPDATE SET wisp_number = excluded.wisp_number`
+             ON CONFLICT(telegram_chat_id) DO UPDATE SET wisp_number = excluded.wisp_number, display_name = excluded.display_name`
         ).run(wispNumber, chatId, wispNumber, Date.now());
         return true;
     } catch (err) {
