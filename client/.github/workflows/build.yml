@@ -1,0 +1,186 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+
+  workflow_dispatch:
+
+jobs:
+  build:
+    # versions.json requires macOS 26 / Xcode 26.2. The macos-13 image this workflow
+    # originally asked for has been retired by GitHub, so the job queued forever.
+    runs-on: macos-26
+
+    # Publishing the IPA as a release asset has to create tags and releases.
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          fetch-depth: '0'
+
+      - name: Set active Xcode path
+        run: |
+          XCODE_VERSION=$(cat versions.json | python3 -c 'import json,sys;obj=json.load(sys.stdin);print(obj["xcode"]);')
+          echo "Requested Xcode $XCODE_VERSION; available:"
+          ls /Applications | grep -i '^Xcode' || true
+          sudo xcode-select -s /Applications/Xcode_$XCODE_VERSION.app/Contents/Developer
+          xcodebuild -version
+
+      # The real configuration carries api_id/api_hash and is deliberately not in the
+      # repository (see .gitignore). Recreate it here from repository secrets.
+      - name: Create build configuration
+        env:
+          API_ID: ${{ secrets.API_ID }}
+          API_HASH: ${{ secrets.API_HASH }}
+        run: |
+          if [ -z "$API_ID" ] || [ -z "$API_HASH" ]; then
+            echo "::error::Set the API_ID and API_HASH repository secrets (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+          # Secrets pasted through the web UI often carry a trailing newline, which lands
+          # inside the JSON string and makes the parser fail with "Invalid control
+          # character". Strip every whitespace character before interpolating.
+          API_ID_CLEAN=$(printf '%s' "$API_ID" | tr -d '[:space:]')
+          API_HASH_CLEAN=$(printf '%s' "$API_HASH" | tr -d '[:space:]')
+          cat > build-system/ci-configuration.json <<EOF
+          {
+            "bundle_id": "ph.telegra.Telegraph",
+            "api_id": "$API_ID_CLEAN",
+            "api_hash": "$API_HASH_CLEAN",
+            "team_id": "C67CF9S4VU",
+            "app_center_id": "0",
+            "is_internal_build": "true",
+            "is_appstore_build": "false",
+            "appstore_id": "0",
+            "app_specific_url_scheme": "tg",
+            "premium_iap_product_id": "",
+            "enable_siri": false,
+            "enable_icloud": false
+          }
+          EOF
+
+      # Matches --disk_cache in .bazelrc, so a build that dies partway resumes from here
+      # on the next run instead of recompiling everything.
+      - name: Restore Bazel disk cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/netegram-bazel
+          key: netegram-bazel-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            netegram-bazel-${{ runner.os }}-
+
+      - name: Create canonical source directory
+        run: |
+          set -x
+          # Copy straight to the canonical name. The upstream workflow copied and then
+          # renamed, which breaks here: this repository is itself called "netegram", so the
+          # rename resolved to moving the directory into itself.
+          sudo mkdir -p /Users/Shared
+          sudo rm -rf /Users/Shared/netegram
+          cp -R "$GITHUB_WORKSPACE" /Users/Shared/netegram
+
+      - name: Build the App
+        run: |
+          set -x
+
+          # source code paths are included in the final binary, so we need to make them stable across builds
+          SOURCE_DIR=/Users/Shared/netegram
+
+          # use canonical bazel root
+          BAZEL_USER_ROOT="/private/var/tmp/_bazel_containerhost"
+
+          cd $SOURCE_DIR
+
+          BUILD_NUMBER_OFFSET="$(cat build_number_offset)"
+
+          export APP_VERSION=$(cat versions.json | python3 -c 'import json,sys;obj=json.load(sys.stdin);print(obj["app"]);')
+          export COMMIT_COUNT=$(git rev-list --count HEAD)
+          export COMMIT_COUNT="$(($COMMIT_COUNT+$BUILD_NUMBER_OFFSET))"
+          export BUILD_NUMBER="$COMMIT_COUNT"
+          echo "BUILD_NUMBER=$(echo $BUILD_NUMBER)" >> $GITHUB_ENV
+          echo "APP_VERSION=$(echo $APP_VERSION)" >> $GITHUB_ENV
+
+          # Netegram's own release number, bumped by hand in netegram_version. The build
+          # number counts commits and jumps around, which makes one build hard to tell from
+          # the next when they are sitting in a downloads folder.
+          NETEGRAM_RELEASE="$(tr -d '[:space:]' < netegram_version)"
+          # Kept as a shell variable as well as an env one: GITHUB_ENV only reaches later
+          # steps, and the copy that names the file happens further down in this same step.
+          export NETEGRAM_RELEASE_FILE="$(echo "$NETEGRAM_RELEASE" | tr '.' '_')"
+          echo "NETEGRAM_RELEASE=$NETEGRAM_RELEASE" >> $GITHUB_ENV
+          echo "NETEGRAM_RELEASE_FILE=$NETEGRAM_RELEASE_FILE" >> $GITHUB_ENV
+
+          # Simulator build: needs no code signing. The bundled fake-codesigning profiles
+          # are stand-ins for Telegram's own and lack the aps-environment entitlement a
+          # device build asks for, so a device IPA needs real provisioning profiles issued
+          # for this bundle id. This still compiles every line of Swift, which is what CI
+          # is here to verify.
+          # Telegram/BUILD references a .mobileprovision per app extension, so the
+          # provisioning package must be populated — --xcodeManagedCodesigning leaves it
+          # empty and the load phase fails.
+          #
+          # BuildConfiguration.py matches profiles with
+          #     profile_name.startswith(team_id + '.' + bundle_id)
+          # so the configuration above must carry BOTH the team id and the bundle id the
+          # bundled fake profiles were issued for. Any mismatch means no profile is found
+          # at all, which surfaces as the misleading "no valid aps-environment" error.
+          # A build for a real device needs your own profiles, team id and bundle id.
+          python3 build-system/Make/ImportCertificates.py --path build-system/fake-codesigning/certs
+          python3 -u build-system/Make/Make.py \
+            --bazelUserRoot="$BAZEL_USER_ROOT" \
+            --cacheDir="$HOME/.cache/netegram-bazel" \
+            build \
+            --configurationPath="build-system/ci-configuration.json" \
+            --codesigningInformationPath=build-system/fake-codesigning \
+            --configuration=release_arm64 \
+            --buildNumber="$BUILD_NUMBER"
+
+          OUTPUT_PATH="build/artifacts"
+          rm -rf "$OUTPUT_PATH"
+          mkdir -p "$OUTPUT_PATH"
+          # bazel-out is a symlink, so find needs -L to descend into it at all.
+          IPA_PATH=$(find -L bazel-out -maxdepth 6 -name '*.ipa' -type f 2>/dev/null | head -n 1)
+          echo "Found ipa: ${IPA_PATH:-<none>}"
+          if [ -n "$IPA_PATH" ]; then
+            cp "$IPA_PATH" "$OUTPUT_PATH/Netegram_${NETEGRAM_RELEASE_FILE}.ipa"
+          else
+            echo "::warning::No .ipa produced. Tree under bazel-out/*/bin/Telegram:"
+            find -L bazel-out -maxdepth 6 -name '*.app' -o -maxdepth 6 -name '*.ipa' 2>/dev/null | head -n 20
+          fi
+
+      # Published as a release asset, not an Actions artifact. Artifacts count against the
+      # account's storage quota — 500 MB on the free plan, about seven IPAs — and hitting it
+      # fails the job, which also skips saving the Bazel cache, so every later build started
+      # cold. Release assets have no total quota, only 2 GiB per file.
+      #
+      # The GitHub CLI ships on the runner, so the archived create-release actions are not
+      # needed. One release per build number: a rerun of the same commit reuses the number,
+      # so the release is created only if missing and the asset is replaced in place.
+      #
+      # No `if: always()` any more: a failed build has nothing worth publishing.
+      #
+      # Signed with the repository's stub certificates, so iOS will refuse to install it
+      # as-is. Re-sign with your own Apple ID (Sideloadly, AltStore) to sideload it.
+      - name: Publish IPA
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          IPA="/Users/Shared/netegram/build/artifacts/Netegram_${NETEGRAM_RELEASE_FILE}.ipa"
+          if [ ! -f "$IPA" ]; then
+            echo "::error::No IPA at $IPA - the build step produced nothing to publish."
+            exit 1
+          fi
+          TAG="netegram-${NETEGRAM_RELEASE}-${BUILD_NUMBER}"
+          if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Netegram ${NETEGRAM_RELEASE} (${BUILD_NUMBER})" \
+              --notes "Commit ${GITHUB_SHA}"
+          fi
+          gh release upload "$TAG" "$IPA" -R "$GITHUB_REPOSITORY" --clobber
+          echo "::notice::IPA: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"

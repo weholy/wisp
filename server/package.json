@@ -1,0 +1,22 @@
+{
+  "name": "netegram-native-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx --env-file=.env src/index.ts",
+    "build": "tsc -p . && node -e \"require('fs').copyFileSync('src/db/schema.sql','dist/db/schema.sql')\"",
+    "start": "node --env-file=.env dist/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "tsx": "^4.19.2",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.5",
+    "@types/ws": "^8.5.13"
+  }
+}

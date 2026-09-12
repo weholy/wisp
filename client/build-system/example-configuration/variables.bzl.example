@@ -1,0 +1,16 @@
+# Copy to variables.bzl and fill in with your own values.
+# variables.bzl is listed in .gitignore so credentials never enter git history.
+telegram_bundle_id = "org.example.netegram"
+telegram_api_id = "<your api_id from https://my.telegram.org/apps>"
+telegram_api_hash = "<your api_hash from https://my.telegram.org/apps>"
+telegram_team_id = "<your Apple Team ID>"
+telegram_app_center_id = "0"
+telegram_is_internal_build = "false"
+telegram_is_appstore_build = "false"
+telegram_appstore_id = "0"
+telegram_app_specific_url_scheme = "tg"
+telegram_premium_iap_product_id = ""
+telegram_aps_environment = "development"
+telegram_enable_siri = False
+telegram_enable_icloud = False
+telegram_enable_watch = False
