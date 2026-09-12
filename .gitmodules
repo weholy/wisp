@@ -1,0 +1,39 @@
+[submodule "client/submodules/rlottie/rlottie"]
+	path = client/submodules/rlottie/rlottie
+	url = https://github.com/TelegramMessenger/rlottie.git
+[submodule "client/build-system/bazel-rules/rules_apple"]
+	path = client/build-system/bazel-rules/rules_apple
+	url = https://github.com/ali-fareed/rules_apple.git
+[submodule "client/build-system/bazel-rules/rules_swift"]
+	path = client/build-system/bazel-rules/rules_swift
+	url = https://github.com/bazelbuild/rules_swift.git
+[submodule "client/build-system/bazel-rules/apple_support"]
+	path = client/build-system/bazel-rules/apple_support
+	url = https://github.com/bazelbuild/apple_support.git
+[submodule "client/submodules/TgVoipWebrtc/tgcalls"]
+	path = client/submodules/TgVoipWebrtc/tgcalls
+	url = https://github.com/TelegramMessenger/tgcalls.git
+[submodule "client/third-party/libvpx/libvpx"]
+	path = client/third-party/libvpx/libvpx
+	url = https://github.com/webmproject/libvpx.git
+[submodule "client/third-party/webrtc/webrtc"]
+	path = client/third-party/webrtc/webrtc
+	url = https://github.com/ali-fareed/webrtc.git
+[submodule "client/build-system/bazel-rules/rules_xcodeproj"]
+	path = client/build-system/bazel-rules/rules_xcodeproj
+	url = https://github.com/MobileNativeFoundation/rules_xcodeproj.git
+[submodule "client/submodules/LottieCpp/lottiecpp"]
+	path = client/submodules/LottieCpp/lottiecpp
+	url = https://github.com/ali-fareed/lottiecpp.git
+[submodule "client/third-party/dav1d/dav1d"]
+	path = client/third-party/dav1d/dav1d
+	url = https://github.com/ali-fareed/dav1d.git
+[submodule "client/third-party/td/td"]
+	path = client/third-party/td/td
+	url = https://github.com/tdlib/td
+[submodule "client/third-party/XcodeGen"]
+	path = client/third-party/XcodeGen
+	url = https://github.com/yonaskolb/XcodeGen.git
+[submodule "client/build-system/bazel-rules/sourcekit-bazel-bsp"]
+	path = client/build-system/bazel-rules/sourcekit-bazel-bsp
+	url = https://github.com/spotify/sourcekit-bazel-bsp.git
