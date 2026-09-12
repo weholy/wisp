@@ -21,8 +21,10 @@ chatRouter.get('/', (req, res) => {
 });
 
 chatRouter.post('/direct', (req, res) => {
-    const peerPhone = String(req.body?.phone ?? '').trim();
-    const peer = db.prepare('SELECT id FROM users WHERE phone = ?').get(peerPhone) as { id: number } | undefined;
+    const peerNumber = String(req.body?.wispNumber ?? '').trim();
+    const peer = db.prepare('SELECT id FROM users WHERE wisp_number = ?').get(peerNumber) as
+        | { id: number }
+        | undefined;
     if (!peer) {
         res.status(404).json({ error: 'user_not_found' });
         return;

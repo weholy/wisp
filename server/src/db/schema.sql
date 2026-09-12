@@ -1,11 +1,34 @@
--- One user per phone number. telegram_chat_id is the chat with our bot that
--- delivers login codes; it is set the moment someone shares their contact with
--- the bot and is required before a login code can be sent to that phone.
+-- wisp_number is a display identifier shaped like a phone number — it is not
+-- a real, dialable telecom number and nothing is ever sent to it outside
+-- this bot. It exists so someone can have a Wisp account without exposing
+-- their real phone number: free accounts get a random one, Stars unlock
+-- picking a specific look or typing a custom string (see telegramBot.ts).
+--
+-- telegram_chat_id is what makes the account real: it is the actual chat
+-- with our bot, on the person's own Telegram account, and it is the only
+-- place a login code for THIS account is ever delivered — regardless of
+-- which wisp_number is attached to it.
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    phone TEXT NOT NULL UNIQUE,
-    telegram_chat_id INTEGER,
+    wisp_number TEXT NOT NULL UNIQUE,
+    telegram_chat_id INTEGER NOT NULL UNIQUE,
     display_name TEXT NOT NULL,
+    is_premium INTEGER NOT NULL DEFAULT 0,
+    -- Set only via the ADMIN_CHAT_IDS env var at startup (see config.ts /
+    -- applyAdminBootstrap), never by anything reachable through the bot
+    -- itself — there is no button or command that grants this.
+    is_admin INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+-- One row per Stars payment the bot has actually seen, keyed by Telegram's
+-- own charge id so a redelivered update (Telegram retries if we're slow to
+-- answer) cannot be counted twice.
+CREATE TABLE IF NOT EXISTS payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_chat_id INTEGER NOT NULL,
+    charge_id TEXT NOT NULL UNIQUE,
+    stars INTEGER NOT NULL,
     created_at INTEGER NOT NULL
 );
 

@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "tsx --env-file=.env src/index.ts",
     "build": "tsc -p . && node -e \"require('fs').copyFileSync('src/db/schema.sql','dist/db/schema.sql')\"",
-    "start": "node --env-file=.env dist/index.js"
+    "start": "node --env-file=.env dist/index.js",
+    "pretest": "npm run build",
+    "test": "node scripts/test-bot-logic.mjs"
   },
   "dependencies": {
     "express": "^4.21.2",

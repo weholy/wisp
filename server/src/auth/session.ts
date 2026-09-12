@@ -3,7 +3,7 @@ import { db } from '../db/db.js';
 
 export interface AuthedUser {
     id: number;
-    phone: string;
+    wisp_number: string;
     display_name: string;
 }
 
@@ -23,7 +23,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 
     const row = db
         .prepare(
-            `SELECT u.id, u.phone, u.display_name
+            `SELECT u.id, u.wisp_number, u.display_name
              FROM sessions s JOIN users u ON u.id = s.user_id
              WHERE s.token = ?`
         )

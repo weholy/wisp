@@ -3,7 +3,7 @@ import express from 'express';
 import { authRouter } from './auth/routes.js';
 import { chatRouter } from './chat/routes.js';
 import { config } from './config.js';
-import { startBotPolling } from './telegramBot.js';
+import { applyAdminBootstrap, startBotPolling } from './telegramBot.js';
 import { attachWebSocket } from './ws/server.js';
 
 const app = express();
@@ -20,4 +20,5 @@ server.listen(config.port, () => {
     console.log(`netegram-native server listening on :${config.port}`);
 });
 
+applyAdminBootstrap();
 startBotPolling();
